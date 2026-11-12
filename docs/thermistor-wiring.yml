@@ -1,0 +1,18 @@
+layout:
+  breadboard:
+    hidden: false
+board: freenove-esp32-wrover-ext
+title: Temperature sensor for your weather site
+subtitle: Thermistor voltage divider on GPIO 32 — Freenove ESP32-WROVER
+components:
+  - {type: thermistor, at: [2, c]}
+  - {type: resistor, value: "10k", from: [3, e], span: 4}
+wires:
+  - {from: bb.2.c, to: board.L17, color: red, label: 3V3}
+  - {from: bb.3.e, to: board.GPIO32, color: orange, label: signal — GPIO 32}
+  - {from: bb.7.e, to: board.L14, color: black, label: ground — GND}
+notes:
+  - "The thermistor and the 10k resistor form a voltage divider: 3V3 → thermistor → GPIO 32 → 10k → GND."
+  - "GPIO 32 is an ADC1 pin, so the reading still works while the ESP32 is on Wi-Fi."
+  - "Read it with ADC, convert the voltage to resistance, then to °C — or send the raw value and convert on the server."
+  - "Next step for the site: have the ESP32 POST each reading to a Vercel API route."

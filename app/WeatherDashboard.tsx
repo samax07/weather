@@ -2,6 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  celsiusToFahrenheit,
+  formatAge,
+  isSensorFresh,
+  sensorAgeMs,
+  type SensorReading,
+} from "@/lib/sensor";
+import {
   describeWeatherCode,
   formatObservedTime,
   humidityLabel,
@@ -10,16 +17,32 @@ import {
 
 type Coordinates = { latitude: number; longitude: number };
 
+type CardView = {
+  temperature: number;
+  unit: string;
+  humidity: number;
+  icon: string;
+  headline: string;
+  detail: string;
+  location: string;
+  note: string;
+  badge: string;
+  footerLeft: string;
+  footerRight: React.ReactNode;
+  source: "sensor" | "weather";
+};
+
 export default function WeatherDashboard() {
   const [data, setData] = useState<WeatherSnapshot | null>(null);
+  const [sensor, setSensor] = useState<SensorReading | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
   const [detecting, setDetecting] = useState(true);
   const [coords, setCoords] = useState<Coordinates | null>(null);
-  const latestRequest = useRef(0);
+  const latestWeatherRequest = useRef(0);
 
-  const load = useCallback(async (nextCoords: Coordinates | null) => {
-    const requestId = ++latestRequest.current;
+  const loadWeather = useCallback(async (nextCoords: Coordinates | null) => {
+    const requestId = ++latestWeatherRequest.current;
     setBusy(true);
     setError(null);
 
@@ -40,28 +63,45 @@ export default function WeatherDashboard() {
         );
       }
 
-      if (requestId !== latestRequest.current) return;
+      if (requestId !== latestWeatherRequest.current) return;
       setData(body as WeatherSnapshot);
     } catch (cause) {
-      if (requestId !== latestRequest.current) return;
+      if (requestId !== latestWeatherRequest.current) return;
       setError(
         cause instanceof Error ? cause.message : "Could not load the weather.",
       );
     } finally {
-      if (requestId === latestRequest.current) setBusy(false);
+      if (requestId === latestWeatherRequest.current) setBusy(false);
+    }
+  }, []);
+
+  const loadSensor = useCallback(async () => {
+    try {
+      const response = await fetch("/api/readings", { cache: "no-store" });
+      if (!response.ok) return;
+      const body = await response.json().catch(() => null);
+      setSensor((body?.reading as SensorReading | null) ?? null);
+    } catch {
+      // Keep the last known reading; the next poll may succeed.
     }
   }, []);
 
   useEffect(() => {
     let cancelled = false;
 
-    // Show the network-approximate reading right away, then refine it with
-    // the device's more precise location if the visitor allows it.
-    load(null);
+    // Show the public weather feed right away. The page then switches to the
+    // ESP32 reading as soon as one is available.
+    loadWeather(null);
+    loadSensor();
+
+    const pollSensor = setInterval(loadSensor, 60_000);
 
     if (!("geolocation" in navigator)) {
       setDetecting(false);
-      return;
+      return () => {
+        cancelled = true;
+        clearInterval(pollSensor);
+      };
     }
 
     navigator.geolocation.getCurrentPosition(
@@ -73,7 +113,7 @@ export default function WeatherDashboard() {
         };
         setCoords(precise);
         setDetecting(false);
-        load(precise);
+        loadWeather(precise);
       },
       () => {
         if (!cancelled) setDetecting(false);
@@ -83,10 +123,22 @@ export default function WeatherDashboard() {
 
     return () => {
       cancelled = true;
+      clearInterval(pollSensor);
     };
-  }, [load]);
+  }, [loadWeather, loadSensor]);
 
-  const refresh = () => load(coords);
+  const refresh = () => {
+    loadWeather(coords);
+    loadSensor();
+  };
+
+  const sensorFresh = isSensorFresh(sensor);
+  const view: CardView | null =
+    sensorFresh && sensor
+      ? sensorView(sensor)
+      : data
+        ? weatherView(data, detecting)
+        : null;
 
   return (
     <div className="shell">
@@ -108,25 +160,25 @@ export default function WeatherDashboard() {
         </button>
       </header>
 
-      <section className="card" aria-busy={busy}>
+      <section className="card" aria-busy={busy || !view}>
         <p className="sr-only" role="status" aria-live="polite">
-          {data
-            ? `${Math.round(data.temperature)} degrees, ${Math.round(data.humidity)} percent humidity in ${data.location.label}.`
+          {view
+            ? `${view.temperature} degrees, ${view.humidity} percent humidity from ${view.location}.`
             : busy
               ? "Loading current weather."
               : "Weather unavailable."}
         </p>
 
-        {!data && error ? (
+        {!view && error ? (
           <ErrorState error={error} onRetry={refresh} />
-        ) : !data ? (
+        ) : !view ? (
           <Skeleton />
         ) : (
-          <WeatherDetails data={data} detecting={detecting} />
+          <CardDetails view={view} />
         )}
       </section>
 
-      {data && error ? (
+      {view && error && !sensorFresh ? (
         <p className="inline-error" role="alert">
           Couldn&apos;t refresh — showing the last reading.{" "}
           <button type="button" onClick={refresh}>
@@ -134,22 +186,42 @@ export default function WeatherDashboard() {
           </button>
         </p>
       ) : null}
+
+      {view ? (
+        <p className="source-note">
+          {sensorFresh
+            ? "Reading live from the ESP32 in the room."
+            : "No recent ESP32 reading — showing the local weather feed."}
+        </p>
+      ) : null}
     </div>
   );
 }
 
-function WeatherDetails({
-  data,
-  detecting,
-}: {
-  data: WeatherSnapshot;
-  detecting: boolean;
-}) {
-  const temperature = Math.round(data.temperature);
-  const feelsLike = Math.round(data.apparentTemperature);
-  const humidity = Math.round(data.humidity);
-  const weather = describeWeatherCode(data.weatherCode);
+function sensorView(reading: SensorReading): CardView {
+  const age = sensorAgeMs(reading);
 
+  return {
+    temperature: Math.round(celsiusToFahrenheit(reading.temperatureC)),
+    unit: "°F",
+    humidity: Math.round(reading.humidity),
+    icon: "🌡️",
+    headline: "Your ESP32",
+    detail: "· DHT22 reading",
+    location: "DHT22 sensor",
+    note: `Updated ${formatAge(age)}`,
+    badge: "Sensor",
+    footerLeft: `Reported ${formatAge(age)}`,
+    footerRight: "via ESP32",
+    source: "sensor",
+  };
+}
+
+function weatherView(
+  data: WeatherSnapshot,
+  detecting: boolean,
+): CardView {
+  const weather = describeWeatherCode(data.weatherCode);
   const note = detecting
     ? "Finding your precise location…"
     : data.location.source === "client"
@@ -158,66 +230,85 @@ function WeatherDetails({
         ? "Approximate location based on your network"
         : "Allow location access for your local weather";
 
+  return {
+    temperature: Math.round(data.temperature),
+    unit: data.temperatureUnit,
+    humidity: Math.round(data.humidity),
+    icon: weather.icon,
+    headline: weather.label,
+    detail: `· feels like ${Math.round(data.apparentTemperature)}${data.temperatureUnit}`,
+    location: data.location.label,
+    note,
+    badge: "Live",
+    footerLeft: `Observed ${formatObservedTime(data.observedAt)} ${data.timezoneAbbreviation} · Local time`,
+    footerRight: (
+      <>
+        Data from{" "}
+        <a href="https://open-meteo.com" target="_blank" rel="noreferrer">
+          Open-Meteo
+        </a>
+      </>
+    ),
+    source: "weather",
+  };
+}
+
+function CardDetails({ view }: { view: CardView }) {
   return (
     <>
       <div className="location">
-        <PinIcon />
-        <span className="location-name">{data.location.label}</span>
-        <span className="location-note">{note}</span>
-        <span className="badge">Live</span>
+        {view.source === "sensor" ? <SensorIcon /> : <PinIcon />}
+        <span className="location-name">{view.location}</span>
+        <span className="location-note">{view.note}</span>
+        <span className="badge" data-source={view.badge.toLowerCase()}>
+          {view.badge}
+        </span>
       </div>
 
       <div className="readings">
         <div className="temperature-block">
           <div className="temperature">
             <span className="weather-icon" aria-hidden="true">
-              {weather.icon}
+              {view.icon}
             </span>
             <span className="temperature-value">
-              {temperature}
-              <span className="temperature-unit">{data.temperatureUnit}</span>
+              {view.temperature}
+              <span className="temperature-unit">{view.unit}</span>
             </span>
           </div>
           <p className="condition">
-            <strong>{weather.label}</strong> · feels like {feelsLike}
-            {data.temperatureUnit}
+            <strong>{view.headline}</strong> {view.detail}
           </p>
         </div>
 
         <div className="humidity">
           <div className="stat-label">Humidity</div>
           <div className="humidity-value">
-            {humidity}
+            {view.humidity}
             <span>%</span>
           </div>
           <div
             className="bar"
             role="meter"
-            aria-valuenow={humidity}
+            aria-valuenow={view.humidity}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-label="Relative humidity"
           >
             <span
               className="bar-fill"
-              style={{ width: `${Math.min(100, Math.max(0, humidity))}%` }}
+              style={{
+                width: `${Math.min(100, Math.max(0, view.humidity))}%`,
+              }}
             />
           </div>
-          <div className="humidity-caption">{humidityLabel(humidity)}</div>
+          <div className="humidity-caption">{humidityLabel(view.humidity)}</div>
         </div>
       </div>
 
       <footer className="card-footer">
-        <span>
-          Observed {formatObservedTime(data.observedAt)}{" "}
-          {data.timezoneAbbreviation} · Local time
-        </span>
-        <span>
-          Data from{" "}
-          <a href="https://open-meteo.com" target="_blank" rel="noreferrer">
-            Open-Meteo
-          </a>
-        </span>
+        <span>{view.footerLeft}</span>
+        <span>{view.footerRight}</span>
       </footer>
     </>
   );
@@ -274,6 +365,20 @@ function PinIcon() {
         strokeLinejoin="round"
       />
       <circle cx="12" cy="10" r="2.6" stroke="currentColor" strokeWidth="1.8" />
+    </svg>
+  );
+}
+
+function SensorIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path
+        d="M14 14.8V5a2 2 0 1 0-4 0v9.8a4 4 0 1 0 4 0Z"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+      <circle cx="12" cy="18" r="1.5" fill="currentColor" />
     </svg>
   );
 }

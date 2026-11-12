@@ -1,0 +1,12 @@
+[
+  {
+    "name": "dht22-wiring",
+    "title": "DHT22 temperature & humidity sensor",
+    "date": "2026-11-12"
+  },
+  {
+    "name": "thermistor-wiring",
+    "title": "Temperature sensor for your weather site",
+    "date": "2026-11-12"
+  }
+]

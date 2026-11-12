@@ -381,6 +381,26 @@ main {
   cursor: pointer;
 }
 
+.source-note {
+  margin: 0;
+  padding: 0 10px;
+  text-align: center;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+.badge[data-source="sensor"] {
+  color: #047857;
+  background: rgba(16, 185, 129, 0.14);
+}
+
+@media (prefers-color-scheme: dark) {
+  .badge[data-source="sensor"] {
+    color: #34d399;
+    background: rgba(52, 211, 153, 0.14);
+  }
+}
+
 .skeleton {
   border-radius: 10px;
   background: var(--track);

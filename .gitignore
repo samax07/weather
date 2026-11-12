@@ -26,3 +26,6 @@ yarn-error.log*
 
 # vercel
 .vercel
+
+# sensor firmware credentials
+firmware/config.py
