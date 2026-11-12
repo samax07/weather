@@ -4,6 +4,8 @@ A small Next.js app that shows the current temperature and humidity. It prefers
 a live DHT22 reading from an ESP32 in the room and falls back to the local
 weather feed when the sensor has gone quiet.
 
+Live at <https://weather-7qkl.vercel.app>.
+
 ![weather](https://img.shields.io/badge/Next.js-16-black) ![weather](https://img.shields.io/badge/deploy-Vercel-black)
 
 ## How it works
