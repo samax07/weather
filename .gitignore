@@ -29,3 +29,7 @@ yarn-error.log*
 
 # sensor firmware credentials
 firmware/config.py
+
+# python
+__pycache__/
+*.pyc

@@ -1,104 +1,117 @@
+import { neon } from "@neondatabase/serverless";
 import type { SensorReading } from "@/lib/sensor";
 
-const LATEST_KEY = "weather:latest";
-const HISTORY_KEY = "weather:history";
-const HISTORY_LIMIT = 288; // 24 h at one reading every 5 min
+type Sql = ReturnType<typeof neon>;
 
-type ReadingStore = {
-  latest: SensorReading | null;
-  history: SensorReading[];
+type ReadingRow = {
+  temperature_c: number;
+  humidity: number;
+  recorded_at: string | Date;
+  received_at: string | Date;
 };
 
-/**
- * Local development has no external database, so readings live in this
- * process. On Vercel every request may land on a different instance, which is
- * why production uses Upstash Redis when its env vars are present.
- */
 const globalForReadings = globalThis as typeof globalThis & {
-  __weatherReadingStore?: ReadingStore;
+  __weatherSql?: Sql;
+  __weatherSchema?: Promise<void>;
+  __weatherLocal?: { latest: SensorReading | null };
 };
 
-const localStore: ReadingStore = (globalForReadings.__weatherReadingStore ??= {
-  latest: null,
-  history: [],
-});
+const localStore = (globalForReadings.__weatherLocal ??= { latest: null });
 
-function upstashConfig(): { url: string; token: string } | null {
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) return null;
-  return { url: url.replace(/\/+$/, ""), token };
+function connectionString(): string | null {
+  return (
+    process.env.DATABASE_URL ??
+    process.env.POSTGRES_URL ??
+    process.env.NEON_DATABASE_URL ??
+    null
+  );
 }
 
-async function upstashCommand(
-  commands: unknown[][],
-): Promise<Array<{ result?: unknown; error?: string }>> {
-  const config = upstashConfig();
-  if (!config) throw new Error("Upstash is not configured.");
+function database(): Sql {
+  const url = connectionString();
+  if (!url) throw new Error("DATABASE_URL is not set.");
+  return (globalForReadings.__weatherSql ??= neon(url));
+}
 
-  const response = await fetch(`${config.url}/pipeline`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.token}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(commands),
-    cache: "no-store",
-  });
+async function createSchema(sql: Sql): Promise<void> {
+  await sql`
+    CREATE TABLE IF NOT EXISTS readings (
+      id BIGSERIAL PRIMARY KEY,
+      temperature_c DOUBLE PRECISION NOT NULL,
+      humidity DOUBLE PRECISION NOT NULL,
+      recorded_at TIMESTAMPTZ NOT NULL,
+      received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS readings_received_at_idx
+    ON readings (received_at DESC)
+  `;
+}
 
-  if (!response.ok) {
-    throw new Error(`Upstash request failed with ${response.status}.`);
+async function ensureSchema(): Promise<Sql> {
+  const sql = database();
+  if (!globalForReadings.__weatherSchema) {
+    globalForReadings.__weatherSchema = createSchema(sql).catch((cause) => {
+      globalForReadings.__weatherSchema = undefined;
+      throw cause;
+    });
   }
+  await globalForReadings.__weatherSchema;
+  return sql;
+}
 
-  return (await response.json()) as Array<{ result?: unknown; error?: string }>;
+function mapRow(row: ReadingRow): SensorReading {
+  return {
+    temperatureC: Number(row.temperature_c),
+    humidity: Number(row.humidity),
+    recordedAt: new Date(row.recorded_at).toISOString(),
+    receivedAt: new Date(row.received_at).toISOString(),
+  };
 }
 
 export function sensorStorageConfigured(): boolean {
-  return upstashConfig() !== null || !process.env.VERCEL;
+  return connectionString() !== null || !process.env.VERCEL;
 }
 
 export async function saveReading(
   input: Omit<SensorReading, "receivedAt">,
 ): Promise<SensorReading> {
-  const reading: SensorReading = {
-    ...input,
-    receivedAt: new Date().toISOString(),
-  };
+  if (!connectionString()) {
+    if (process.env.VERCEL) {
+      throw new Error("DATABASE_URL is not set.");
+    }
 
-  if (upstashConfig()) {
-    const json = JSON.stringify(reading);
-    const results = await upstashCommand([
-      ["SET", LATEST_KEY, json],
-      ["LPUSH", HISTORY_KEY, json],
-      ["LTRIM", HISTORY_KEY, "0", String(HISTORY_LIMIT - 1)],
-    ]);
-    const failure = results.find((entry) => entry.error);
-    if (failure) throw new Error(failure.error);
+    const reading: SensorReading = {
+      ...input,
+      receivedAt: new Date().toISOString(),
+    };
+    localStore.latest = reading;
     return reading;
   }
 
-  if (process.env.VERCEL) {
-    throw new Error("Sensor storage is not configured.");
-  }
+  const sql = await ensureSchema();
+  const rows = (await sql`
+    INSERT INTO readings (temperature_c, humidity, recorded_at)
+    VALUES (${input.temperatureC}, ${input.humidity}, ${input.recordedAt})
+    RETURNING temperature_c, humidity, recorded_at, received_at
+  `) as ReadingRow[];
 
-  localStore.latest = reading;
-  localStore.history.unshift(reading);
-  localStore.history = localStore.history.slice(0, HISTORY_LIMIT);
-  return reading;
+  return mapRow(rows[0]);
 }
 
 export async function getLatestReading(): Promise<SensorReading | null> {
-  if (upstashConfig()) {
-    const [entry] = await upstashCommand([["GET", LATEST_KEY]]);
-    if (entry?.error) throw new Error(entry.error);
-    const value = entry?.result;
-    if (typeof value !== "string") return null;
-    try {
-      return JSON.parse(value) as SensorReading;
-    } catch {
-      return null;
-    }
+  if (!connectionString()) {
+    return process.env.VERCEL ? null : localStore.latest;
   }
 
-  return process.env.VERCEL ? null : localStore.latest;
+  const sql = await ensureSchema();
+  const rows = (await sql`
+    SELECT temperature_c, humidity, recorded_at, received_at
+    FROM readings
+    ORDER BY received_at DESC
+    LIMIT 1
+  `) as ReadingRow[];
+
+  return rows.length > 0 ? mapRow(rows[0]) : null;
 }

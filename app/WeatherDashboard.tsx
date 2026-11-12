@@ -94,7 +94,7 @@ export default function WeatherDashboard() {
     loadWeather(null);
     loadSensor();
 
-    const pollSensor = setInterval(loadSensor, 60_000);
+    const pollSensor = setInterval(loadSensor, 5_000);
 
     if (!("geolocation" in navigator)) {
       setDetecting(false);

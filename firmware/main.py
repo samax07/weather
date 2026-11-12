@@ -1,6 +1,6 @@
 """Read a DHT22 and post each reading to the Weather Now API.
 
-Wiring: DHT22 VCC -> 3V3, DATA -> GPIO 27, GND -> GND.
+Wiring: DHT22 VCC -> 3V3, DATA -> SENSOR_PIN, GND -> GND.
 Copy config.example.py to config.py on the board and fill it in first.
 """
 
@@ -13,19 +13,18 @@ import ujson
 import urequests
 
 try:
-    from config import (
-        API_URL,
-        READ_INTERVAL_SECONDS,
-        SENSOR_TOKEN,
-        WIFI_PASSWORD,
-        WIFI_SSID,
-    )
+    import config
 except ImportError:
     raise SystemExit(
         "config.py is missing - copy config.example.py to the board as config.py"
     )
 
-SENSOR_PIN = 27
+WIFI_SSID = config.WIFI_SSID
+WIFI_PASSWORD = config.WIFI_PASSWORD
+API_URL = config.API_URL
+SENSOR_TOKEN = getattr(config, "SENSOR_TOKEN", "")
+READ_INTERVAL_SECONDS = getattr(config, "READ_INTERVAL_SECONDS", 5)
+SENSOR_PIN = getattr(config, "SENSOR_PIN", 27)
 
 sensor = dht.DHT22(machine.Pin(SENSOR_PIN))
 wlan = network.WLAN(network.STA_IF)

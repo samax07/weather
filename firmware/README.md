@@ -1,6 +1,6 @@
 # ESP32 + DHT22 firmware
 
-MicroPython firmware that reads a DHT22 every 30 seconds and posts the result to
+MicroPython firmware that reads a DHT22 every 5 seconds and posts the result to
 the Weather Now API.
 
 ## Wiring
@@ -32,7 +32,10 @@ Set:
   `https://your-project.vercel.app/api/readings`.
 - `SENSOR_TOKEN` — must match the server's `SENSOR_TOKEN`. Leave empty when the
   server has no token configured.
-- `READ_INTERVAL_SECONDS` — 30 seconds by default.
+- `READ_INTERVAL_SECONDS` — 5 seconds by default (the DHT22 needs 2 s between reads).
+- `SENSOR_PIN` — GPIO for the data line, 27 by default. The bench board is
+  currently wired to 33, which it shares with a Simon Says button; move the
+  jumper to 27 and set `SENSOR_PIN = 27` when convenient.
 
 `config.py` is git-ignored so Wi-Fi passwords stay out of the repository.
 
@@ -78,5 +81,5 @@ with `400`, `401`, `503` and a JSON `error` message.
   5 V if the module is 3.3 V only), and the pull-up is present on a bare
   sensor. The DHT22 needs at least 2 seconds between reads.
 - **`POST` fails with 401** — `SENSOR_TOKEN` differs from the server's.
-- **`POST` fails with 503** — the server has no storage configured. Locally the
-  in-memory store is enough; on Vercel set the Upstash variables.
+- **`POST` fails with 503** — the server has no database configured. Set
+  `DATABASE_URL`; locally the in-memory fallback is enough.

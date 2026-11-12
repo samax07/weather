@@ -10,7 +10,7 @@ weather feed when the sensor has gone quiet.
 
 - `POST /api/readings` accepts a reading from the ESP32, validates it and stores
   it. `GET /api/readings` returns the latest one.
-- The dashboard polls that endpoint every minute. A reading younger than five
+- The dashboard polls that endpoint every five seconds. A reading younger than five
   minutes wins; otherwise the page falls back to Open-Meteo.
 - `app/api/weather/route.ts` proxies [Open-Meteo](https://open-meteo.com), a free
   weather API that needs no key. It accepts optional `lat`/`lon` query params,
@@ -31,7 +31,7 @@ weather feed, so it works before the ESP32 is involved.
 ## ESP32 sensor
 
 The firmware in [`firmware/`](firmware/README.md) reads a DHT22 and posts a
-reading every 30 seconds:
+reading every 5 seconds:
 
 ```http
 POST /api/readings
@@ -47,21 +47,28 @@ Content-Type: application/json
 { "reading": { "temperatureC": 24.4, "humidity": 41.8, "recordedAt": "…", "receivedAt": "…" }, "storageConfigured": true }
 ```
 
-### Storage
+### Database
 
-Local development keeps the latest reading in memory. Vercel runs each request
-in a fresh instance, so production needs a shared store — the app uses
-[Upstash Redis](https://upstash.com) through its REST API when these are set:
+Readings are stored in Postgres ([Neon](https://neon.tech)). Local development
+falls back to an in-memory reading when `DATABASE_URL` is not set, which keeps
+the dashboard usable without a database.
 
 | Variable | Purpose |
 | --- | --- |
-| `UPSTASH_REDIS_REST_URL` | Redis REST endpoint |
-| `UPSTASH_REDIS_REST_TOKEN` | Redis REST token |
+| `DATABASE_URL` | Neon connection string (the pooled URL is fine) |
 | `SENSOR_TOKEN` | Shared secret the ESP32 sends as a bearer token |
 
-Upstash's free tier is enough. Add both variables in Vercel → Project →
-Settings → Environment Variables. Without them, `POST /api/readings` returns
-`503` in production and the page keeps using Open-Meteo.
+Set `DATABASE_URL` in `.env.local` for local development and in Vercel →
+Project → Settings → Environment Variables for production. The API creates the
+`readings` table and its index on first use, so the database only needs to
+exist. `POSTGRES_URL` and `NEON_DATABASE_URL` also work if that is the name your
+Neon integration used.
+
+At one reading every five seconds the table grows by about 17,000 rows a day;
+add a retention job if you want to trim history.
+
+Without a database, local development still works from memory, but production
+`POST /api/readings` returns `503` and the page keeps using Open-Meteo.
 
 ## Deploy to Vercel
 

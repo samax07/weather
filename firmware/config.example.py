@@ -12,5 +12,10 @@ API_URL = "http://YOUR-COMPUTER-IP:3000/api/readings"
 # development when SENSOR_TOKEN is unset on the server.
 SENSOR_TOKEN = "change-me"
 
-# The DHT22 needs at least 2 seconds between reads.
-READ_INTERVAL_SECONDS = 30
+# GPIO the DHT22 data line is wired to. 27 avoids the Simon Says buttons;
+# use 33 if the sensor is still on that pin.
+SENSOR_PIN = 27
+
+# The DHT22 needs at least 2 seconds between reads; the board posts every
+# 5 seconds.
+READ_INTERVAL_SECONDS = 5
